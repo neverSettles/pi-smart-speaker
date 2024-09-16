@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import tempfile
 from pydub import AudioSegment
 from pydub.playback import play
+import time
 
 # Load environment variables and OpenAI API key
 load_dotenv()
@@ -26,11 +27,41 @@ AUDIO_CONFIG = {
 # Initialize PyAudio
 audio = pyaudio.PyAudio()
 
+WAKE_WORD_TIMEOUT = 120  # 2 minutes timeout
+
+def record_audio_for_wake_word():
+    """Records audio to detect the wake word."""
+    stream = audio.open(format=AUDIO_CONFIG['format'], channels=AUDIO_CONFIG['channels'],
+                        rate=AUDIO_CONFIG['rate'], input=True, frames_per_buffer=AUDIO_CONFIG['chunk'])
+    print("Listening for the wake word...")
+
+    frames = []
+    while len(frames) < 5 * AUDIO_CONFIG['rate'] / AUDIO_CONFIG['chunk']:  # Limit to 5 seconds
+        data = stream.read(AUDIO_CONFIG['chunk'], exception_on_overflow=False)
+        frames.append(data)
+
+    stream.stop_stream()
+    stream.close()
+    return frames
+
+def detect_wake_word(audio_data):
+    """Detects 'Hey Bubby' using Whisper API transcription."""
+    temp_filename = "temp_wake_word.wav"
+    save_audio_to_wav(audio_data, temp_filename)
+    
+    transcription = transcribe_audio(temp_filename)
+    print(f"Transcription for wake word detection: {transcription}")
+    
+    if "hey bubby" in transcription.lower():
+        return True
+    return False
+
 def record_audio():
     """Records audio until silence is detected."""
     stream = audio.open(format=AUDIO_CONFIG['format'], channels=AUDIO_CONFIG['channels'],
                         rate=AUDIO_CONFIG['rate'], input=True, frames_per_buffer=AUDIO_CONFIG['chunk'])
-    print("Listening for the wake word...")
+
+    print("Listening for your speech...")
 
     frames, silent_count, recording = [], 0, False
 
@@ -40,9 +71,7 @@ def record_audio():
         amplitude = np.max(np.abs(audio_data))
 
         if not recording and amplitude > AUDIO_CONFIG['threshold']:
-            if detect_wake_word(audio_data):
-                print("Wake word detected. Start speaking...")
-                recording, silent_count = True, 0
+            recording, silent_count = True, 0
 
         if recording:
             frames.append(data)
@@ -55,10 +84,6 @@ def record_audio():
     stream.stop_stream()
     stream.close()
     return frames
-
-def detect_wake_word(audio_data):
-    """Detects 'Hey Bubby' (placeholder logic)."""
-    return True
 
 def save_audio_to_wav(frames, filename="output.wav"):
     """Save recorded audio to a WAV file."""
@@ -79,6 +104,14 @@ def transcribe_audio(filename):
     except Exception as e:
         print(f"Error during transcription: {e}")
         raise
+
+def simple_responses(question):
+    """Check for predefined responses to common questions."""
+    predefined_responses = {
+        "who is the first president": "George Washington, do you want to hear more?"
+    }
+    question_lower = question.strip().lower()
+    return predefined_responses.get(question_lower)
 
 def generate_gpt4_response(prompt):
     """Send transcription to GPT-4 and get a response."""
@@ -102,18 +135,42 @@ def play_audio_from_text(text):
     print("Audio playback completed.")
 
 def main():
+    wake_word_detected = False
+    last_interaction_time = time.time()
+
     while True:
+        current_time = time.time()
+        
+        # If the wake word was detected more than WAKE_WORD_TIMEOUT seconds ago, listen for the wake word again
+        if not wake_word_detected or (current_time - last_interaction_time > WAKE_WORD_TIMEOUT):
+            print("Waiting for the wake word...")
+            wake_word_audio = record_audio_for_wake_word()
+            
+            if detect_wake_word(wake_word_audio):
+                print("Wake word detected! Entering interactive mode.")
+                wake_word_detected = True
+                last_interaction_time = current_time
+
+        # Record the user's speech
+        print("Listening for user input...")
         audio_frames = record_audio()
         save_audio_to_wav(audio_frames)
 
         transcription = transcribe_audio("output.wav")
         if transcription:
             print(f"You said: {transcription}")
+            last_interaction_time = current_time  # Reset the timer for interactions
 
-            response = generate_gpt4_response(transcription)
-            print(f"GPT-4 Response: {response}")
-
-            play_audio_from_text(response)
+            # Check for predefined responses
+            simple_response = simple_responses(transcription)
+            if simple_response:
+                print(f"Predefined Response: {simple_response}")
+                play_audio_from_text(simple_response)
+            else:
+                # Send transcription to GPT-4 API for general queries
+                response = generate_gpt4_response(transcription)
+                print(f"GPT-4 Response: {response}")
+                play_audio_from_text(response)
 
 if __name__ == "__main__":
     main()
