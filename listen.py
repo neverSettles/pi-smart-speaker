@@ -119,8 +119,8 @@ def generate_gpt4_response(prompt):
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "You are a helpful assistant who is brief."},
+            {"role": "user", "content": prompt + ' be brief in your reply, around 2-3 setences should be good.'}
         ]
     )
     return response['choices'][0]['message']['content']
